@@ -1,14 +1,20 @@
 {
-    "name": "streaming-markdown",
-    "version": "0.2.15",
+    "name": "@paulrichez/streaming-markdown",
+    "version": "0.3.0",
     "author": "Damian Tarnawski <gthetarnav@gmail.com>",
-    "description": "Streaming Markdown parser, à la ChatGPT",
+    "contributors": [
+        "Paul Richez (https://github.com/PaulRichez)"
+    ],
+    "description": "Streaming Markdown parser, à la ChatGPT — a maintained fork of streaming-markdown",
     "license": "MIT",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/thetarnav/streaming-markdown.git"
+        "url": "git+https://github.com/PaulRichez/streaming-markdown.git"
     },
-    "homepage": "https://thetarnav.github.io/streaming-markdown",
+    "homepage": "https://github.com/PaulRichez/streaming-markdown#readme",
+    "bugs": {
+        "url": "https://github.com/PaulRichez/streaming-markdown/issues"
+    },
     "private": false,
     "sideEffects": false,
     "type": "module",
@@ -16,7 +22,8 @@
         "./smd.js",
         "./smd.d.ts",
         "./smd.d.ts.map",
-        "./smd.min.js"
+        "./smd.min.js",
+        "./CHANGELOG.md"
     ],
     "browser": "./smd.min.js",
     "module": "./smd.js",
@@ -49,5 +56,8 @@
     "packageManager": "pnpm@10.10.0",
     "engines": {
         "node": ">=20"
+    },
+    "publishConfig": {
+        "access": "public"
     }
 }

@@ -1,29 +1,52 @@
 # Streaming *Markdown*
 
-[![version](https://img.shields.io/npm/v/streaming-markdown?logo=npm)](https://www.npmjs.com/package/streaming-markdown) [![github](https://img.shields.io/badge/GitHub-streaming--markdown-orange?logo=github)](https://github.com/thetarnav/streaming-markdown)
+[![version](https://img.shields.io/npm/v/@paulrichez/streaming-markdown?logo=npm)](https://www.npmjs.com/package/@paulrichez/streaming-markdown) [![github](https://img.shields.io/badge/GitHub-streaming--markdown-orange?logo=github)](https://github.com/PaulRichez/streaming-markdown)
 
 **Experiment making a streaming markdown parser *à la ChatGPT.***
+
+> [!NOTE]
+> **This is a fork.** `@paulrichez/streaming-markdown` is a maintained fork of
+> [**thetarnav/streaming-markdown**](https://github.com/thetarnav/streaming-markdown) by
+> [Damian Tarnawski](https://github.com/thetarnav), the original author, published as
+> [`streaming-markdown`](https://www.npmjs.com/package/streaming-markdown) on npm. The original has had no
+> release since 0.2.15 (May 2025), so this fork carries the fixes below on top of it, under the same MIT
+> license. The API is unchanged: replace the import and nothing else moves.
+>
+> Fixed in the fork (see [CHANGELOG.md](./CHANGELOG.md)):
+> - a bracket inside a link's text no longer ends the link: `[[1]](url)`, `[a [b] c](url)`
+>   ([upstream #39](https://github.com/thetarnav/streaming-markdown/issues/39));
+> - backticks in the middle of a line no longer close a code fence
+>   ([upstream PR #46](https://github.com/thetarnav/streaming-markdown/pull/46), by its author);
+> - a blockquote or a table inside a list item stays in it
+>   ([upstream PR #42](https://github.com/thetarnav/streaming-markdown/pull/42), by its author, plus the
+>   table's row indentation);
+> - an underscore inside a word is no longer emphasis: `snake_case_name`, `[read_me.md](url)`
+>   ([upstream PR #29](https://github.com/thetarnav/streaming-markdown/pull/29) reported it).
+>
+> It is maintained for [aparté](https://apartejs.dev)'s `@aparte/plugin-streaming-markdown`, and usable on its
+> own like the original. Issues about the fork go to
+> [this repository](https://github.com/PaulRichez/streaming-markdown/issues).
 
 ---
 
 ## Installation
 
-Install `streaming-markdown` package from npm.
+Install `@paulrichez/streaming-markdown` package from npm.
 
 ```bash
-npm install streaming-markdown
+npm install @paulrichez/streaming-markdown
 ```
 
-*Or just copy [**`smd.js`**](https://github.com/thetarnav/streaming-markdown/blob/main/smd.js) file to your project.*
+*Or just copy [**`smd.js`**](https://github.com/PaulRichez/streaming-markdown/blob/main/smd.js) file to your project.*
 
-Or use the [CDN link](https://www.jsdelivr.com/package/npm/streaming-markdown).\
+Or use the [CDN link](https://www.jsdelivr.com/package/npm/@paulrichez/streaming-markdown).\
 It's a minified *(3kB Gzip)* version of the package, with only the necessary functions exported.\
-See the exports in [`smd_min_entry.js`](https://github.com/thetarnav/streaming-markdown/blob/main/smd_min_entry.js).\
+See the exports in [`smd_min_entry.js`](https://github.com/PaulRichez/streaming-markdown/blob/main/smd_min_entry.js).\
 The package uses ES module exports, so you need to use `type="module"` in your script tag.
 
 ```html
 <script type="module">
-    import * as smd from "https://cdn.jsdelivr.net/npm/streaming-markdown/smd.min.js"
+    import * as smd from "https://cdn.jsdelivr.net/npm/@paulrichez/streaming-markdown/smd.min.js"
     // ...
 </script>
 ```
@@ -35,7 +58,7 @@ It's single argument is a `Renderer` object, which is an interface to render the
 There are two built-in renderers—`default_renderer` and `logger_renderer`—that you can try at first.
 
 ```js
-import * as smd from "streaming-markdown"
+import * as smd from "@paulrichez/streaming-markdown"
 
 const element  = document.getElementById("markdown")
 const renderer = smd.default_renderer(element)
@@ -148,6 +171,13 @@ smd.parser_end(parser)
     - [x] Line breaks `<br>`, `<br/>`
 - [x] LaTex tags for blocks `\[...\]`, `$$...$$` and inline `\(...\)` or `$...$`
 
-If you think that something is missing or doesn't work, please [make an issue](https://github.com/thetarnav/streaming-markdown/issues).
+If you think that something is missing or doesn't work, please [make an issue](https://github.com/PaulRichez/streaming-markdown/issues).
+
+## Credits
+
+Written by [Damian Tarnawski](https://github.com/thetarnav) as
+[thetarnav/streaming-markdown](https://github.com/thetarnav/streaming-markdown). This fork is maintained by
+[Paul Richez](https://github.com/PaulRichez); the upstream contributions it carries keep their authors in the
+git history. MIT license, see [license](./license).
 
 🔴Ⓜ️⬇️
