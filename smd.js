@@ -193,6 +193,7 @@ export const heading_to_level = (token) => {
  * @property {string      } hr_char         - For horizontal rule parsing
  * @property {number      } hr_chars        - For horizontal rule parsing
  * @property {number      } table_state
+ * @property {number      } link_depth      - Brackets opened inside a Link or Image's text, not yet closed
  */
 
 const TOKEN_ARRAY_CAP = 24
@@ -220,6 +221,7 @@ export function parser(renderer) {
         indent     : "",
         indent_len : 0,
         table_state: 0,
+        link_depth : 0,
     }
 }
 
@@ -1125,6 +1127,14 @@ export function parser_write(p, chunk) {
             continue
         case LINK:
         case IMAGE:
+            if ("]" === p.pending && p.link_depth > 0) {
+                /*
+                [a [b] c](url)
+                     ^ closes a bracket the text opened: text, not the end of the text
+                */
+                p.link_depth -= 1
+                break
+            }
             if ("]" === p.pending) {
                 /*
                 [Link](url)
@@ -1418,8 +1428,15 @@ export function parser_write(p, chunk) {
             ) {
                 add_text(p)
                 add_token(p, LINK)
+                p.link_depth = 0
                 p.pending = char
                 continue
+            }
+            /* [a [b] c](url)
+                  ^ a bracket inside the text: counted, so its `]` does not end the text
+            */
+            if (p.token === LINK || p.token === IMAGE) {
+                p.link_depth += 1
             }
             break
         /* ![Image](url) */
@@ -1429,6 +1446,7 @@ export function parser_write(p, chunk) {
             ) {
                 add_text(p)
                 add_token(p, IMAGE)
+                p.link_depth = 0
                 p.pending = ""
                 continue
             }

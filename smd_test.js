@@ -855,6 +855,58 @@ test_single_write("Un-Escaped link Both",
     }]
 )
 
+test_single_write("Link with brackets in text",
+    "[a [b] c](url)",
+    [{
+        type    : smd.Token.Paragraph,
+        children: [{
+            type    : smd.Token.Link,
+            attrs   : {[smd.Attr.Href]: "url"},
+            children: ["a [b] c"],
+        }]
+    }]
+)
+
+test_single_write("Link with a bracketed number as text",
+    "[[1]](url)",
+    [{
+        type    : smd.Token.Paragraph,
+        children: [{
+            type    : smd.Token.Link,
+            attrs   : {[smd.Attr.Href]: "url"},
+            children: ["[1]"],
+        }]
+    }]
+)
+
+test_single_write("Link with nested brackets in text",
+    "see [a [b [c]] d](url) now",
+    [{
+        type    : smd.Token.Paragraph,
+        children: ["see ", {
+            type    : smd.Token.Link,
+            attrs   : {[smd.Attr.Href]: "url"},
+            children: ["a [b [c]] d"],
+        }, " now"]
+    }]
+)
+
+test_single_write("Link after a link with brackets",
+    "[[1]](a) and [b](c)",
+    [{
+        type    : smd.Token.Paragraph,
+        children: [{
+            type    : smd.Token.Link,
+            attrs   : {[smd.Attr.Href]: "a"},
+            children: ["[1]"],
+        }, " and ", {
+            type    : smd.Token.Link,
+            attrs   : {[smd.Attr.Href]: "c"},
+            children: ["b"],
+        }]
+    }]
+)
+
 test_single_write("Blockquote",
     "> foo",
     [{
