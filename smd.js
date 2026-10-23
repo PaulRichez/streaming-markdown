@@ -799,6 +799,19 @@ export function parser_write(p, chunk) {
                     break
                 }
             } else {
+                /*
+                - item
+                  | a | b |
+                ^^ a row's indentation, inside a list item: not text
+                */
+                if (' ' === char && /^ *$/.test(p.pending)) {
+                    p.pending = pending_with_char
+                    continue
+                }
+                if ('|' === char && /^ +$/.test(p.pending)) {
+                    p.pending = char
+                    continue
+                }
                 switch (p.pending) {
                 case "|":
                     add_token(p, TABLE_ROW)

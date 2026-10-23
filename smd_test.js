@@ -1455,6 +1455,55 @@ for (const [c, token] of /** @type {const} */([
         }]
     )
 
+    test_single_write("Blockquote in " + list_name + suffix,
+        c+" "+"a"+"\n"+
+        indent+"> b",
+        [{
+            type    : token,
+            attrs   : attrs,
+            children: [{
+                type    : smd.Token.List_Item,
+                children: ["a", {
+                    type    : smd.Token.Blockquote,
+                    children: [{
+                        type    : smd.Token.Paragraph,
+                        children: ["b"],
+                    }],
+                }],
+            }],
+        }],
+    )
+
+    test_single_write("Table in " + list_name + suffix,
+        c+" "+"a"+"\n"+
+        indent+"| b | c |"+"\n"+
+        indent+"| - | - |"+"\n"+
+        indent+"| d | e |",
+        [{
+            type    : token,
+            attrs   : attrs,
+            children: [{
+                type    : smd.Token.List_Item,
+                children: ["a", {
+                    type    : smd.Token.Table,
+                    children: [{
+                        type:     smd.Token.Table_Row,
+                        children: [
+                            {type: smd.Token.Table_Cell, children: [" b "]},
+                            {type: smd.Token.Table_Cell, children: [" c "]},
+                        ]
+                    }, {
+                        type:     smd.Token.Table_Row,
+                        children: [
+                            {type: smd.Token.Table_Cell, children: [" d "]},
+                            {type: smd.Token.Table_Cell, children: [" e "]},
+                        ]
+                    }],
+                }],
+            }],
+        }],
+    )
+
     for (let l = 3; l <= 5; l += 1) {
         let fence = '`'.repeat(l)
 
