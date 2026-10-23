@@ -783,6 +783,74 @@ test_single_write("Link",
     }]
 )
 
+// Upstream PR #29's case: an underscore inside a word is not emphasis.
+test_single_write("Link with Underline",
+    "[title_with_underline](url)",
+    [{
+        type: smd.Token.Paragraph,
+        children: [{
+            type: smd.Token.Link,
+            attrs: { [smd.Attr.Href]: "url" },
+            children: ["title_with_underline"],
+        }]
+    }]
+)
+
+test_single_write("Underscores inside a word",
+    "snake_case_name",
+    [{
+        type    : smd.Token.Paragraph,
+        children: ["snake_case_name"],
+    }]
+)
+
+test_single_write("Underscores inside words of a sentence",
+    "call my_function_name with a_b",
+    [{
+        type    : smd.Token.Paragraph,
+        children: ["call my_function_name with a_b"],
+    }]
+)
+
+// A stream splits words and links anywhere: every two-chunk split gives the same tree.
+test_chunked_write("Underscores inside words of a sentence",
+    "call my_function_name with a_b",
+    [{
+        type    : smd.Token.Paragraph,
+        children: ["call my_function_name with a_b"],
+    }]
+)
+
+test_chunked_write("Link with brackets in text and underscores",
+    "see [[1] read_me.md](url) _now_",
+    [{
+        type    : smd.Token.Paragraph,
+        children: ["see ", {
+            type    : smd.Token.Link,
+            attrs   : {[smd.Attr.Href]: "url"},
+            children: ["[1] read_me.md"],
+        }, " ", {
+            type    : smd.Token.Italic_Und,
+            children: ["now"],
+        }]
+    }]
+)
+
+test_single_write("Link with Strong in text",
+    "[**bold** text](url)",
+    [{
+        type    : smd.Token.Paragraph,
+        children: [{
+            type    : smd.Token.Link,
+            attrs   : {[smd.Attr.Href]: "url"},
+            children: [{
+                type    : smd.Token.Strong_Ast,
+                children: ["bold"],
+            }, " text"],
+        }]
+    }]
+)
+
 test_single_write("Link with code",
     "[`title`](url)",
     [{

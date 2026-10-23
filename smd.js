@@ -194,6 +194,7 @@ export const heading_to_level = (token) => {
  * @property {number      } hr_chars        - For horizontal rule parsing
  * @property {number      } table_state
  * @property {number      } link_depth      - Brackets opened inside a Link or Image's text, not yet closed
+ * @property {string      } last_char       - Last character of the text already flushed, "" after a token boundary
  */
 
 const TOKEN_ARRAY_CAP = 24
@@ -222,6 +223,7 @@ export function parser(renderer) {
         indent_len : 0,
         table_state: 0,
         link_depth : 0,
+        last_char  : "",
     }
 }
 
@@ -242,7 +244,16 @@ function add_text(p) {
     if (p.text.length === 0) return
     console.assert(p.len > 0, "Never adding text to root")
     p.renderer.add_text(p.renderer.data, p.text)
+    p.last_char = p.text.slice(-1)
     p.text = ""
+}
+
+/**
+ * The character the text ends on, flushed or not: a word goes on across a chunk boundary.
+ * @param   {Parser} p
+ * @returns {string} */
+function text_end(p) {
+    return p.text.length > 0 ? p.text.slice(-1) : p.last_char
 }
 
 /**
@@ -273,6 +284,7 @@ function push_text(p, text) {
  * @returns {void  } */
 function end_token(p) {
     console.assert(p.len > 0, "No nodes to end")
+    p.last_char = ""
     p.len -= 1
     p.token = /** @type {Token} */ (p.tokens[p.len])
     p.renderer.end_token(p.renderer.data)
@@ -298,6 +310,7 @@ function add_token(p, token) {
         end_token(p)
     }
 
+    p.last_char = ""
     p.len += 1
     p.tokens[p.len] = token
     p.token = token
@@ -1329,6 +1342,12 @@ export function parser_write(p, chunk) {
                 p.token === EQUATION_INLINE ||
                 p.token === STRONG_AST)
              break
+
+            /* snake_case_name
+                    ^ an underscore inside a word is not emphasis (CommonMark: `_` does not
+                      open intraword), in a link's text as anywhere: [read_me.md](url)
+            */
+            if ('_' === p.pending[0] && /[\p{L}\p{N}]/u.test(text_end(p))) break
 
             /** @type {Token} */ let italic = ITALIC_AST
             /** @type {Token} */ let strong = STRONG_AST
