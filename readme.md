@@ -10,7 +10,8 @@
 > [Damian Tarnawski](https://github.com/thetarnav), the original author, published as
 > [`streaming-markdown`](https://www.npmjs.com/package/streaming-markdown) on npm. The original has had no
 > release since 0.2.15 (May 2025), so this fork carries the fixes below on top of it, under the same MIT
-> license. The API is unchanged: replace the import and nothing else moves.
+> license. The API is the original's plus one optional argument, `parser(renderer, options)`; maths follows
+> Pandoc's rules and can be turned off, see [`parser` options](#parser-options).
 >
 > Fixed in the fork (see [CHANGELOG.md](./CHANGELOG.md)):
 > - a bracket inside a link's text no longer ends the link: `[[1]](url)`, `[a [b] c](url)`
@@ -21,7 +22,9 @@
 >   ([upstream PR #42](https://github.com/thetarnav/streaming-markdown/pull/42), by its author, plus the
 >   table's row indentation);
 > - an underscore inside a word is no longer emphasis: `snake_case_name`, `[read_me.md](url)`
->   ([upstream PR #29](https://github.com/thetarnav/streaming-markdown/pull/29) reported it).
+>   ([upstream PR #29](https://github.com/thetarnav/streaming-markdown/pull/29) reported it);
+> - maths follows Pandoc's rules: `$5 and $10` is text, `$$x$$` on one line is display maths, and a formula is
+>   written only once its closer is confirmed.
 >
 > It is maintained for [aparté](https://apartejs.dev)'s `@aparte/plugin-streaming-markdown`, and usable on its
 > own like the original. Issues about the fork go to
@@ -54,7 +57,7 @@ The package uses ES module exports, so you need to use `type="module"` in your s
 ## Usage
 
 First create new markdown `Parser` by calling `parser` function.\
-It's single argument is a `Renderer` object, which is an interface to render the parsed markdown tokens to the DOM.\
+Its first argument is a `Renderer` object, which is an interface to render the parsed markdown tokens to the DOM.\
 There are two built-in renderers—`default_renderer` and `logger_renderer`—that you can try at first.
 
 ```js
@@ -64,6 +67,37 @@ const element  = document.getElementById("markdown")
 const renderer = smd.default_renderer(element)
 const parser   = smd.parser(renderer)
 ```
+
+### `parser` options
+
+An optional second argument, `Parser_Options`, sets what the parser recognises.
+
+```js
+const parser = smd.parser(renderer, {math: false})
+```
+
+| Field  | Type      | Default | Description |
+| ------ | --------- | ------- | ----------- |
+| `math` | `boolean` | `true`  | Recognise maths: `$x$` and `\(x\)` as `Equation_Inline`, `$$x$$` and `\[x\]` as `Equation_Block`.<br>`false`: `$` is text, `\(` and `\[` are Markdown escapes, and no `Equation_*` token is written. |
+
+With maths on, `$` follows [Pandoc's rules](https://pandoc.org/MANUAL.html#math): the opener is followed by a
+non-space, the closer follows a non-space and is not followed by a digit, so `$5 and $10` is text.
+A formula is held back until its closer is confirmed, then written as one token, and its `end_token` is where
+it ends: nothing written is ever taken back. The text after a `$` that never closes appears at the end of its
+line, cell or paragraph, or past 1024 characters (4096 for display maths). A formula held back does not cross a
+list item, a table cell, a heading's line or a quote.
+
+A formula stops at a line that opens a block: a quote `>` (not the one continuing its own quote), a rule or
+an ATX heading (`#` to `######`, then a space). Inline maths also stops at a table row `|` and a list item
+(`-`, `*`, `+` or `1.`, then a space). Display maths also stops at a code fence (```` ``` ```` or `~~~`), an
+HTML block that can interrupt a paragraph (`</`, `<!`, `<?`, or a block tag such as `<div>` or `<p>`) and a `#`
+alone on its line; and at a list item (`-`, `*`, `+`, `1.` or `1)`, then a space) only when its opener had text
+after it on its own line (`Since $$a = b`). A formula still held back there is text. Other lines are TeX:
+`$x =\n2y$`, `$$\n|a+b| \le |a|+|b|\n$$` and `$$\n<x, y> = 0\n$$` are maths.
+
+A display block opened by `$$` or `\[` at the end of a line is written as it streams, from its first line of
+TeX: its lines are TeX, list items and `|` lines included, and it ends at `$$`, `\]`, a blank line or a line
+that opens another block. A blank line, the end, or such a line right after the opener makes the opener text.
 
 ### `write` function
 
@@ -170,6 +204,8 @@ smd.parser_end(parser)
 - [ ] Html tags (e.g. `<div>`, `<span>`, `<a>`, `<img>`, etc.)
     - [x] Line breaks `<br>`, `<br/>`
 - [x] LaTex tags for blocks `\[...\]`, `$$...$$` and inline `\(...\)` or `$...$`
+    - [x] Pandoc's rules for `$` (`$5 and $10` is text)
+    - [x] Off with `parser(renderer, {math: false})`
 
 If you think that something is missing or doesn't work, please [make an issue](https://github.com/PaulRichez/streaming-markdown/issues).
 

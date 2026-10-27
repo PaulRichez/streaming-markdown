@@ -41,7 +41,8 @@ export const
     MAYBE_URL       = 102,
     MAYBE_TASK      = 103,
     MAYBE_BR        = 104,
-    MAYBE_EQ_BLOCK  = 105
+    MAYBE_EQ_BLOCK  = 105,
+    MAYBE_EQ        = 106
 
 /** @enum {(typeof Token)[keyof typeof Token]} */
 export const Token = /** @type {const} */({
@@ -195,15 +196,46 @@ export const heading_to_level = (token) => {
  * @property {number      } table_state
  * @property {number      } link_depth      - Brackets opened inside a Link or Image's text, not yet closed
  * @property {string      } last_char       - Last character of the text already flushed, "" after a token boundary
+ * @property {boolean     } math            - Maths is recognised, see {@link Parser_Options}
+ * @property {string      } eq_open         - Opener of the formula held back: "$", "\\(", "$$", "\\[" or ""
+ * @property {string      } eq_text         - TeX of a formula held back until its closer is confirmed
+ * @property {boolean     } eq_space        - The held TeX ends on a space, a tab or a newline
+ * @property {boolean     } eq_blank        - Only spaces since a newline: in held TeX, or in an Equation_Block's line
+ * @property {string      } eq_line         - Start of a formula's line that may still open a block, see {@link line_opens}
+ * @property {number      } eq_head         - The held formula's first line, after the opener: 0 only spaces yet, 1 text, 2 none
+ * @property {number      } eq_rerun       - Text being given back by a held formula: 0 none, 1 once, 2 twice or more
+ * @property {number      } eq_rerun_at     - {@link Parser.eq_rerun} when the held formula was opened
+ */
+
+/* The longest formula held back before it is given up as text. An inline formula is
+   rarely over 200 characters and a display formula on one line rarely over a few hundred:
+   past these, what is held is text, and holding it longer would stall the stream. */
+const EQ_INLINE_MAX  = 1024
+const EQ_DISPLAY_MAX = 4096
+
+/* Tags of an HTML block that can interrupt a paragraph (part of CommonMark's type 6 list):
+   such a line ends a display formula, see line_opens. <x, y> is TeX. */
+const HTML_BLOCK_TAGS = [
+    "address", "article", "aside", "blockquote", "details", "dialog", "div", "dl", "fieldset",
+    "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main",
+    "nav", "ol", "p", "pre", "script", "section", "style", "table", "textarea", "ul",
+]
+
+/**
+ * @typedef  {object  } Parser_Options
+ * @property {boolean=} math - Recognise maths: `$x$`, `$$x$$`, `\(x\)`, `\[x\]`. Default `true`.
+ *                             When `false`, `$` is text, `\(` and `\[` are Markdown escapes,
+ *                             no Equation token is written and nothing is held back.
  */
 
 const TOKEN_ARRAY_CAP = 24
 
 /**
  * Makes a new Parser object.
- * @param   {Any_Renderer} renderer
- * @returns {Parser      } */
-export function parser(renderer) {
+ * @param   {Any_Renderer   } renderer
+ * @param   {Parser_Options=} options
+ * @returns {Parser         } */
+export function parser(renderer, options) {
     const tokens = new Uint32Array(TOKEN_ARRAY_CAP)
     tokens[0] = DOCUMENT
     return {
@@ -224,6 +256,15 @@ export function parser(renderer) {
         table_state: 0,
         link_depth : 0,
         last_char  : "",
+        math       : options?.math !== false,
+        eq_open    : "",
+        eq_text    : "",
+        eq_space   : false,
+        eq_blank   : false,
+        eq_line    : "",
+        eq_head    : 0,
+        eq_rerun   : 0,
+        eq_rerun_at: 0,
     }
 }
 
@@ -232,6 +273,34 @@ export function parser(renderer) {
  * @param   {Parser} p
  * @returns {void  } */
 export function parser_end(p) {
+    /* A formula still held back is closed by the end ($x$) or was text, which can hold
+       back another one ($5 and \(x). Nothing of the end is written into it. */
+    while (p.token === MAYBE_EQ) {
+        if ("$" === p.eq_open && "$" === p.pending) {
+            p.pending = ""
+            eq_commit(p)
+        } else {
+            eq_flush(p)
+        }
+    }
+    /* $$ or \[ with nothing after it, or only spaces on the next line, or the start of a line
+       that opens a block: text. A line of TeX after it opens the block. */
+    if (p.token === MAYBE_EQ_BLOCK) {
+        const after = p.pending.slice(2)
+        if (p.eq_line !== "" && 0 === line_opens(p, '\n', true, false)) {
+            add_text(p)
+            add_token(p, EQUATION_BLOCK)
+            p.eq_blank = true
+            p.pending = ""
+            p.blockquote_idx = 0 // the line is read again
+            parser_write(p, after.slice(1))
+        } else {
+            p.token = p.tokens[p.len]
+            p.text += '\\' === p.pending[0] ? '[' : p.pending.slice(0, 2)
+            p.pending = ""
+            parser_write(p, after)
+        }
+    }
     if (p.pending.length > 0) {
         parser_write(p, "\n")
     }
@@ -315,6 +384,162 @@ function add_token(p, token) {
     p.tokens[p.len] = token
     p.token = token
     p.renderer.add_token(p.renderer.data, token)
+}
+
+/**
+ * Hold a formula back: the renderer cannot take a token back,
+ * so nothing is written until the closer is confirmed.
+ * @param   {Parser} p
+ * @param   {string} open
+ * @returns {void  } */
+function eq_hold(p, open) {
+    p.token       = MAYBE_EQ
+    p.eq_open     = open
+    p.eq_text     = ""
+    p.eq_space    = false
+    p.eq_blank    = false
+    p.eq_line     = ""
+    p.eq_head     = 0
+    p.eq_rerun_at = p.eq_rerun
+    p.pending     = ""
+}
+
+/**
+ * Add a character to the held TeX, and keep track of where it stands.
+ * @param   {Parser} p
+ * @param   {string} char
+ * @returns {void  } */
+function eq_add(p, char) {
+    p.eq_text += char
+    p.eq_space = ' ' === char || '\t' === char || '\n' === char
+    p.eq_blank = '\n' === char || p.eq_blank && p.eq_space
+    if (0 === p.eq_head) p.eq_head = '\n' === char ? 2 : p.eq_space ? 0 : 1
+}
+
+/**
+ * A held formula met its closer: it is maths, written whole.
+ * @param   {Parser} p
+ * @returns {void  } */
+function eq_commit(p) {
+    add_text(p)
+    add_token(p, "$" === p.eq_open || "\\(" === p.eq_open ? EQUATION_INLINE : EQUATION_BLOCK)
+    p.text = p.eq_text
+    add_text(p)
+    end_token(p)
+    p.eq_open = ""
+    p.eq_text = ""
+    p.eq_line = ""
+}
+
+/**
+ * A held formula has no closer: it was text, given back to the parser as written.
+ * @param   {Parser} p
+ * @returns {void  } */
+function eq_flush(p) {
+    const held  = p.eq_text + p.pending
+    const rerun = p.eq_rerun
+    /* \( and \[ were escapes: ( and [ */
+    p.text   += '\\' === p.eq_open[0] ? p.eq_open[1] : p.eq_open
+    p.token   = p.tokens[p.len]
+    p.eq_open = ""
+    p.eq_text = ""
+    p.eq_line = ""
+    p.pending = ""
+    /* Text given back can hold back a formula again (Pandoc retries at the next opener).
+       Given back a second time, only a $ formula can, and its TeX has no $ to open another:
+       every character is parsed a bounded number of times. */
+    p.eq_rerun = 0 === p.eq_rerun_at ? 1 : 2
+    parser_write(p, held)
+    p.eq_rerun = rerun
+}
+
+/**
+ * Read one more character of a formula's line, after its indentation, as the start of a block.
+ * A line that opens a block ends the paragraph first (Pandoc parses blocks first), and the
+ * formula with it. `p.eq_line` keeps what was read of the line while that is not known yet,
+ * and stays short: a rule's first three characters, a list number's nine digits, a tag's name.
+ *
+ * Every formula stops at a quote `>`, a rule (three `-`, `*` or `_`, spaces between, alone on
+ * the line) and an ATX heading (1-6 `#`, then a space). Inline maths also stops at the blocks
+ * smd opens there: a table row `|`, a list item (`-`, `*`, `+` or digits with `.`, then a
+ * space). Display maths also stops at a code fence (``` or ~~~), an HTML block that can
+ * interrupt a paragraph (`<` then `/`, `!` or `?`, or a block tag of {@link HTML_BLOCK_TAGS}
+ * then a space, `>`, `/` or the end of the line) and a heading's `#` alone on its line; and at
+ * a list item (`-`, `*`, `+` or digits with `.` or `)`, then a space) only with `lists`: when
+ * the opener had text after it on its own line. Its other lines are TeX: `2b &= 3`, `-x`, `#1`,
+ * `<x, y> = 0`, `|a+b|`.
+ * @param   {Parser } p
+ * @param   {string } char    - The next character, '\n' at the end of the line
+ * @param   {boolean} display - Display maths
+ * @param   {boolean} lists   - A list item's line opens a block
+ * @returns {number } 1 the line opens a block, 0 it cannot, -1 not known yet */
+function line_opens(p, char, display, lists) {
+    const line  = p.eq_line
+    const first = line[0]
+    p.eq_line = ""
+    switch (first) {
+    case undefined:
+        if ('>' === char || '|' === char && !display) return 1
+        if ("#-*_".includes(char) ||
+            lists   && ('+' === char || is_digit(char.charCodeAt(0))) ||
+            display && "`~<".includes(char)
+        ) break
+        return 0
+    /* # Heading */
+    case '#':
+        if (' ' === char || display && '\n' === char) return 1
+        if ('#' === char && line.length < 6) break
+        return 0
+    /* - item, + item, * item, or a rule: --- * * * ___ */
+    case '-': case '*': case '_': case '+':
+        if (' ' === char && 1 === line.length && '_' !== first && lists) return 1
+        if ('+' === first) return 0
+        if (' ' === char || '\t' === char || first === char && line.length >= 3) {
+            p.eq_line = line
+            return -1
+        }
+        if (first === char) break
+        return '\n' === char && line.length >= 3 ? 1 : 0
+    /* ``` or ~~~ */
+    case '`': case '~':
+        if (first !== char) return 0
+        if (2 === line.length) return 1
+        break
+    /* </x <!-- <? or a block tag: <div> <p class="x"> — not <x, y> */
+    case '<': {
+        if (1 === line.length && ('/' === char || '!' === char || '?' === char)) return 1
+        const name = line.slice(1).toLowerCase()
+        if (HTML_BLOCK_TAGS.includes(name) &&
+            (' ' === char || '\t' === char || '>' === char || '/' === char || '\n' === char)
+        ) return 1
+        const next = name + char.toLowerCase()
+        if (HTML_BLOCK_TAGS.some(tag => tag.startsWith(next))) break
+        return 0
+    }
+    /* 1. item, and 1) item for display maths (smd itself opens no list on 1) */
+    default: {
+        const last = line[line.length-1]
+        if ('.' === last || ')' === last) return ' ' === char ? 1 : 0
+        if ('.' === char || ')' === char && display || is_digit(char.charCodeAt(0)) && line.length < 9) break
+        return 0
+    }
+    }
+    p.eq_line = line + char
+    return -1
+}
+
+/**
+ * In a quote, a `>` starting a display formula's line is the quote's, as on a paragraph's
+ * line, not a block: `> $$\n> x\n> $$` is one formula. It moves `p.blockquote_idx` on.
+ * @param   {Parser } p
+ * @param   {string } char
+ * @returns {boolean} the `>` was the quote's */
+function eq_quote(p, char) {
+    if ('>' !== char || "" !== p.eq_line) return false
+    const idx = idx_of_token(p, BLOCKQUOTE, p.blockquote_idx+1)
+    if (-1 === idx) return false
+    p.blockquote_idx = idx
+    return true
 }
 
 /**
@@ -449,26 +674,6 @@ function is_digit(charcode) {
     default:
         return false
     }
-}
-
-/**
- * @param   {number} charcode
- * @returns {boolean} */
-function is_delimeter(charcode) {
-    switch (charcode) {
-    //   " "      ":"      ";"      ")"      ","      "!"      "."      "?"      "]"      "\n"
-    case 32: case 58: case 59: case 41: case 44: case 33: case 46: case 63: case 93: case 10: 
-        return true
-    default:
-        return false
-    }
-}
-
-/**
- * @param   {number} charcode
- * @returns {boolean} */
-function is_delimeter_or_number(charcode) {
-    return is_digit(charcode) || is_delimeter(charcode)
 }
 
 /**
@@ -760,6 +965,9 @@ export function parser_write(p, chunk) {
                 p.token = p.tokens[p.len]
                 p.renderer.add_token(p.renderer.data, LINE_BREAK)
                 p.renderer.end_token(p.renderer.data)
+                /* x$\nhttp:// — a line break ends the $ before it (no autolink right after
+                   a $), not the word: snake\n_case_name is text, as in 0.3.0 */
+                if ('$' === p.last_char) p.last_char = ""
             }
             /* Code Block */
             else if (p.indent_len >= 4) {
@@ -1093,47 +1301,228 @@ export function parser_write(p, chunk) {
                 continue
             }
             break
-        case MAYBE_EQ_BLOCK:
+        case MAYBE_EQ_BLOCK: {
             /*
              \[?  or  $$?
                ^        ^
             */
-            if (char === '\n') {
+            if (2 === p.pending.length) {
+                /* \[ or $$ ends its line: held until the next line says (below) */
+                if (char === '\n') {
+                    p.pending = pending_with_char
+                    p.eq_line = ""
+                    p.blockquote_idx = 0
+                }
+                /* $$x$$ or \[x\] on one line, or inside a paragraph
+                     ^       ^
+                */
+                else if (p.eq_rerun < 2) {
+                    eq_hold(p, p.pending)
+                    parser_write(p, char)
+                }
+                /* text given back twice holds no such formula (see eq_flush) */
+                else {
+                    p.token = p.tokens[p.len]
+                    p.text += '\\' === p.pending[0] ? '[' : p.pending
+                    p.pending = ""
+                    parser_write(p, char)
+                }
+                continue
+            }
+            /*
+             $$\n  x
+                   ^ the block is added at the first character of TeX on the next line.
+             A whitespace-only line, the end, or a line that opens a block comes first:
+             the opener was text, and what follows is Markdown.
+            */
+            if ("" === p.eq_line && (' ' === char || '\t' === char) || eq_quote(p, char)) {
+                p.pending = pending_with_char
+                continue
+            }
+            const opens = "" === p.eq_line && '\n' === char ? 1 : line_opens(p, char, true, false)
+            if (-1 === opens) {
+                p.pending = pending_with_char
+                continue
+            }
+            const open  = p.pending.slice(0, 2)
+            const after = p.pending.slice(2) + char
+            p.pending = ""
+            if (1 === opens) {
+                p.token = p.tokens[p.len]
+                p.text += '\\' === open[0] ? '[' : open
+                parser_write(p, after)
+            } else {
                 add_text(p)
                 add_token(p, EQUATION_BLOCK)
-                p.pending = ""
-            } else {
-                p.token = p.tokens[p.len]
-                if (p.pending[0] === '\\') {
-                    p.text += '['
-                } else {
-                    p.text += '$$'
-                }
-                p.pending = ""
-                parser_write(p, char)
+                p.eq_blank = true
+                p.blockquote_idx = 0 // the line is read again
+                parser_write(p, after.slice(1))
             }
             continue
+        }
         case EQUATION_BLOCK:
+            /* \] or $$: either closes it */
             if ("\\]" === pending_with_char || "$$" === pending_with_char) {
                 add_text(p)
                 end_token(p)
                 p.pending = ""
                 continue
             }
-            break
-        case EQUATION_INLINE:
-            if ("\\)" === pending_with_char || "$" === p.pending[0]) {
-                add_text(p)
-                end_token(p)
-
-                if(char === ')'){
+            /* > x — in a quote, its own marker (see eq_quote) */
+            if (p.eq_blank && eq_quote(p, char)) continue
+            /* A line that opens a block — a heading, a fence, a quote, HTML, a rule — ends it,
+               and what follows is Markdown again. A list item's line is TeX: the opener ended
+               its line. The line is held until it is known (see line_opens). */
+            if (p.eq_line !== "" || p.eq_blank && ' ' !== char && '\t' !== char && '\n' !== char) {
+                /* the newline and indentation before it are the formula's */
+                if ("" === p.eq_line) {
+                    p.text += p.pending
                     p.pending = ""
+                }
+                const opens = line_opens(p, char, true, false)
+                if (-1 === opens) {
+                    p.pending += char
+                    continue
+                }
+                const line = p.pending + char
+                p.pending = ""
+                if (1 === opens) {
+                    add_text(p)
+                    end_token(p)
+                    p.token = LINE_BREAK // the quote's markers on the line are read already
+                    parser_write(p, line)
+                } else {
+                    /* TeX: written on as usual */
+                    p.eq_blank = false
+                    p.text += line.slice(0, -1)
+                    parser_write(p, char)
+                }
+                continue
+            }
+            /* A whitespace-only line ends it, as a blank line ends display maths in Pandoc:
+               what follows is Markdown again */
+            if ('\n' === char) {
+                if (p.eq_blank) {
+                    p.text += p.pending
+                    add_text(p)
+                    end_token(p)
+                    p.pending = char
+                    p.token = LINE_BREAK // the quote's markers on the line are read already
+                    continue
+                }
+                p.eq_blank = true
+                p.blockquote_idx = 0
+            } else if (' ' !== char && '\t' !== char) {
+                p.eq_blank = false
+            }
+            break
+        case MAYBE_EQ: {
+            /*
+             $x$  \(x\)  $$x$$  \[x\]
+             held back, nothing written, until the closer is confirmed
+            */
+            const open    = p.eq_open
+            const display = "$$" === open || "\\[" === open
+            if ('\\' === p.pending) {
+                p.pending = ""
+                /* \(x\)  \[x\]
+                      ^      ^
+                */
+                if (')' === char && "\\(" === open ||
+                    ']' === char && "\\[" === open
+                ) {
+                    eq_commit(p)
+                    continue
+                }
+                /* \$ \\ \, — an escaped pair is TeX, never a closer */
+                eq_add(p, '\\')
+                if ('\n' !== char) {
+                    eq_add(p, char)
+                    continue
+                }
+            }
+            else if ('$' === p.pending) {
+                p.pending = ""
+                /* $$x$$
+                       ^
+                */
+                if ("$$" === open) {
+                    if ('$' === char) {
+                        eq_commit(p)
+                        continue
+                    }
+                    eq_add(p, '$')
+                }
+                /* $x$?
+                     ^ a closer followed by a digit is not one ($x$5): the formula was text
+                */
+                else {
+                    if (is_digit(char.charCodeAt(0))) {
+                        p.pending = '$'
+                        eq_flush(p)
+                    } else {
+                        eq_commit(p)
+                    }
+                    parser_write(p, char)
+                    continue
+                }
+            }
+            if (/* No formula is that long: past it, what is held is text */
+                p.eq_text.length >= (display ? EQ_DISPLAY_MAX : EQ_INLINE_MAX) ||
+                /* A line that opens a block ends the paragraph, and the formula was text.
+                   Read from its first character until it is known: $x =\n2y$ is maths,
+                   $a\n- b$ is not. A list item stops display maths only when the opener had
+                   text after it: Since $$a = b\n- one */
+                (p.eq_line !== "" || p.eq_blank && ' ' !== char && '\t' !== char && '\n' !== char) &&
+                1 === line_opens(p, char, display, !display || 1 === p.eq_head)
+            ) {
+                eq_flush(p)
+                parser_write(p, char)
+                continue
+            }
+            switch (char) {
+            case '\\':
+                p.pending = char
+                continue
+            case '$':
+                if ("$$" === open) {
+                    p.pending = char
+                    continue
+                }
+                if ("$" !== open) break
+                /* $x $ — a closer must follow a non-space: the formula was text
+                     ^
+                */
+                if (p.eq_space) {
+                    eq_flush(p)
+                    parser_write(p, char)
                 } else {
                     p.pending = char
                 }
                 continue
+            /* $5 for `a$b` — code binds tighter than a formula not yet confirmed */
+            case '`':
+                eq_flush(p)
+                parser_write(p, char)
+                continue
+            /* | $5 | (y$) | — a cell ends at its pipe, and a formula left open in it was text */
+            case '|':
+                if (idx_of_token(p, TABLE_CELL, 1) === -1) break
+                eq_flush(p)
+                parser_write(p, char)
+                continue
+            /* A blank line ends a paragraph, and the line ends a list item, a table row,
+               a heading or a quote: a formula left open was text. Only a paragraph's
+               formula goes on to the next line. */
+            case '\n':
+                if (!p.eq_blank && PARAGRAPH === p.tokens[1]) break
+                eq_flush(p)
+                parser_write(p, char)
+                continue
             }
-            break
+            eq_add(p, char)
+            continue
+        }
         /* Raw URLs */
         case MAYBE_URL:
             if ("http://"  === pending_with_char ||
@@ -1235,6 +1624,7 @@ export function parser_write(p, chunk) {
                     p.token = p.tokens[p.len]
                     p.renderer.add_token(p.renderer.data, LINE_BREAK)
                     p.renderer.end_token(p.renderer.data)
+                    if ('$' === p.last_char) p.last_char = "" // as after a newline
                     p.pending = ""
                     continue
                 }
@@ -1258,16 +1648,23 @@ export function parser_write(p, chunk) {
                 p.token === EQUATION_INLINE)
                 break
 
+            /* Without maths, \( and \[ are escapes like any other */
+            if (p.math) {
+                /* \(EQUATION_INLINE\)
+                    ^ held back until \) (not in text given back twice, see eq_flush)
+                */
+                if ('(' === char && p.eq_rerun < 2) {
+                    eq_hold(p, "\\(")
+                    continue
+                }
+                if ('[' === char) {
+                    p.token = MAYBE_EQ_BLOCK
+                    p.pending = pending_with_char
+                    continue
+                }
+            }
+
             switch (char) {
-            case '(':
-                add_text(p)
-                add_token(p, EQUATION_INLINE)
-                p.pending = ""
-                continue
-            case '[':
-                p.token = MAYBE_EQ_BLOCK
-                p.pending = pending_with_char
-                continue
             case '\n':
                 // Escaped newline has the same affect as unescaped one
                 p.pending = char
@@ -1423,10 +1820,12 @@ export function parser_write(p, chunk) {
                 }
             }
             break
-        /* $eq$ | $$eq$$ */
+        /* $eq$ | $$eq$$ — without maths, $ is text */
         case '$':
-            if (p.token !== IMAGE &&
+            if (p.math &&
+                p.token !== IMAGE &&
                 p.token !== STRIKE &&
+                p.token !== EQUATION_BLOCK &&
                 "$" === p.pending
             ) {
                 /* $$EQUATION_BLOCK$$
@@ -1437,19 +1836,18 @@ export function parser_write(p, chunk) {
                     p.pending = pending_with_char
                     continue
                 }
-                /* $123
+                /* $ x — the opener must be followed by a non-space
                     ^
                 */
-                else if (is_delimeter_or_number(char.charCodeAt(0))) {
+                else if (' ' === char || '\t' === char || '\n' === char) {
                     break
                 }
                 /* $EQUATION_INLINE$
-                    ^
+                    ^ held back until the closer is confirmed: $5 and $10 is text
                 */
                 else {
-                    add_text(p)
-                    add_token(p, EQUATION_INLINE)
-                    p.pending = char
+                    eq_hold(p, "$")
+                    parser_write(p, char)
                     continue
                 }
             }
@@ -1496,7 +1894,7 @@ export function parser_write(p, chunk) {
         }
 
         /* foo http://...
-        |      ^
+        |      ^  not right after a $ (GFM: US$http://, $$http://), maths or not
         */
         if (p.token !== IMAGE &&
             p.token !== LINK &&
@@ -1504,7 +1902,7 @@ export function parser_write(p, chunk) {
             p.token !== EQUATION_INLINE &&
             'h' === char &&
            (" " === p.pending ||
-            ""  === p.pending)
+            ""  === p.pending && '$' !== text_end(p))
         ) {
             p.text   += p.pending
             p.pending = char

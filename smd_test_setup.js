@@ -313,12 +313,13 @@ function assert_children(children, expected_children, markdown) {
  * @param {string  } title
  * @param {string  } markdown
  * @param {Children} expected_children
+ * @param {smd.Parser_Options=} options
  * @returns {void}
  */
-export function test_single_write(title, markdown, expected_children) {
+export function test_single_write(title, markdown, expected_children, options) {
     t.test(title + ";", () => {
         const renderer = test_renderer()
-        const parser = smd.parser(renderer)
+        const parser = smd.parser(renderer, options)
 
         smd.parser_write(parser, markdown)
         smd.parser_end(parser)
@@ -328,7 +329,7 @@ export function test_single_write(title, markdown, expected_children) {
 
     t.test(title + "; by_char;", () => {
         const renderer = test_renderer()
-        const parser = smd.parser(renderer)
+        const parser = smd.parser(renderer, options)
 
         for (const char of markdown) {
             smd.parser_write(parser, char)
@@ -344,18 +345,70 @@ export function test_single_write(title, markdown, expected_children) {
  * @param {string} title
  * @param {string} markdown
  * @param {Children} expected_children
+ * @param {smd.Parser_Options=} options
  * @returns {void}
  */
-export function test_chunked_write(title, markdown, expected_children) {
+export function test_chunked_write(title, markdown, expected_children, options) {
     t.test(title + "; every two-chunk split;", () => {
         for (let split = 1; split < markdown.length; split += 1) {
             const renderer = test_renderer()
-            const parser = smd.parser(renderer)
+            const parser = smd.parser(renderer, options)
 
             smd.parser_write(parser, markdown.slice(0, split))
             smd.parser_write(parser, markdown.slice(split))
             smd.parser_end(parser)
 
+            assert_children(renderer.data.root.children, expected_children, markdown)
+        }
+    })
+}
+
+/**
+ * Write the markdown char by char within a time budget: for inputs whose cost must stay
+ * linear. The budget is far above the time expected, so that only a blow-up fails.
+ * @param {string} title
+ * @param {string} markdown
+ * @param {number} max_ms
+ * @param {smd.Parser_Options=} options
+ * @returns {void}
+ */
+export function test_time(title, markdown, max_ms, options) {
+    t.test(title + "; within " + max_ms + "ms;", () => {
+        const renderer = test_renderer()
+        const parser = smd.parser(renderer, options)
+
+        const begin = performance.now()
+        for (const char of markdown) {
+            smd.parser_write(parser, char)
+        }
+        smd.parser_end(parser)
+        const ms = performance.now() - begin
+
+        assert.ok(ms < max_ms, "took " + ms.toFixed(0) + "ms for " + markdown.length + " characters")
+    })
+}
+
+/**
+ * Write the chunks one after another and check what the renderer was given after each:
+ * what a stream shows while it is still running. A `null` chunk ends the parser.
+ * @param {string} title
+ * @param {[string | null, Children][]} steps
+ * @param {smd.Parser_Options=} options
+ * @returns {void}
+ */
+export function test_steps(title, steps, options) {
+    t.test(title + "; step by step;", () => {
+        const renderer = test_renderer()
+        const parser = smd.parser(renderer, options)
+
+        let markdown = ""
+        for (const [chunk, expected_children] of steps) {
+            if (chunk === null) {
+                smd.parser_end(parser)
+            } else {
+                markdown += chunk
+                smd.parser_write(parser, chunk)
+            }
             assert_children(renderer.data.root.children, expected_children, markdown)
         }
     })
