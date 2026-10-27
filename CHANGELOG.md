@@ -4,7 +4,7 @@
 [thetarnav/streaming-markdown](https://github.com/thetarnav/streaming-markdown) (`streaming-markdown` on npm),
 by Damian Tarnawski. Versions up to 0.2.15 are the original's.
 
-## Unreleased
+## 0.3.1
 
 Maths now follows Pandoc's rules, and some text renders differently: pass `parser(renderer, {math: false})`
 to turn maths off.
