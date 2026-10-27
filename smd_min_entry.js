@@ -36,6 +36,7 @@ export {
     LANG,
     CHECKED,
     START,
+    UNCLOSED,
     // Renderer
     default_renderer,
     // Parser

@@ -4,6 +4,31 @@
 [thetarnav/streaming-markdown](https://github.com/thetarnav/streaming-markdown) (`streaming-markdown` on npm),
 by Damian Tarnawski. Versions up to 0.2.15 are the original's.
 
+## Unreleased
+
+A custom renderer should handle the new `Attr.Unclosed`: it marks an `Equation_Block` that turned out not to be
+maths, and the default renderer already turns it back into text. A renderer that ignores it renders as 0.3.1 did.
+
+- `set_attr(Attr.Unclosed, opener)` is called on an `Equation_Block`, just before its `end_token`, when a display
+  block opened by `$$` or `\[` at the end of a line ends without its closer: at a blank line, or at a line that
+  opens a block. Pandoc reads none of it as maths (`$$\na\n\nb\n$$` is the paragraphs `$$ a` and `b $$`), but the
+  block was drawn as it streamed. The value is the opener, `"$$"` or `"\\["`. `Attr.Unclosed` (`UNCLOSED`, 32) is
+  new. The default renderer replaces the `<equation-block>` with a text node: the opener (`[` for `\[`, the
+  escaped bracket it was), a newline and the TeX. A block closed by `$$` or `\]`, or still open when the input
+  ends, never gets it.
+- A `$` inside braces is TeX, not the closer: `$\text{in $x$ units}$` is one formula. `\{` and `\}` are not
+  counted.
+- `$$` or `\[` ending a table row's line is text, as in a cell: it no longer opens a display block over the
+  lines after the row.
+- Tables hold together, the same whether written whole, char by char or in any chunks, and no text lands
+  outside a cell. A row without its closing pipe ends with its line (GFM): `| a | b\n|---|---|\n| c | d |` is
+  one table, where it used to split into two tables and a paragraph. A row with no delimiter row before it is
+  a row of the same table (`| a |\n| b |`). A blank or whitespace-only line ends a table, and so does a line
+  that does not start with `|`, which is read again as Markdown. In a quote, each line's `>` is the quote's, so
+  `> | a |\n> |---|\n> | b |` is one table in one quote.
+- A long `---`, `***` or `___` line is read in linear time: a rule of 200 KB took 7.5 s, it takes about 20 ms.
+  The line was held whole, and its first character read on every character added to it.
+
 ## 0.3.1
 
 Maths now follows Pandoc's rules, and some text renders differently: pass `parser(renderer, {math: false})`

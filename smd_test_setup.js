@@ -413,3 +413,115 @@ export function test_steps(title, steps, options) {
         }
     })
 }
+
+/**
+ * Write the markdown whole, char by char and at every two-chunk split, each time to a new
+ * renderer, and check that renderer after parser_end.
+ * @template {smd.Any_Renderer} R
+ * @param {string             } title
+ * @param {string             } markdown
+ * @param {() => R            } make
+ * @param {(renderer: R, how: string) => void} check
+ * @param {smd.Parser_Options=} options
+ * @returns {void}
+ */
+export function test_every_write(title, markdown, make, check, options) {
+    t.test(title + "; whole, by_char, every two-chunk split;", () => {
+        /** @type {[string, string[]][]} */
+        const writes = [["whole", [markdown]], ["by_char", [...markdown]]]
+        for (let split = 1; split < markdown.length; split += 1) {
+            writes.push(["split at " + split, [markdown.slice(0, split), markdown.slice(split)]])
+        }
+        for (const [how, chunks] of writes) {
+            const renderer = make()
+            const parser = smd.parser(renderer, options)
+            for (const chunk of chunks) smd.parser_write(parser, chunk)
+            smd.parser_end(parser)
+            check(renderer, how)
+        }
+    })
+}
+
+/*
+ A DOM small enough for default_renderer: elements, text nodes, and the HTML they make.
+*/
+class Fake_Text {
+    /** @param {string} text */
+    constructor(text) {
+        this.text = text
+        /** @type {Fake_Element | null} */
+        this.parentElement = null
+    }
+    get textContent() { return this.text }
+    get outerHTML()   { return this.text }
+}
+class Fake_Element {
+    /** @param {string} tag */
+    constructor(tag) {
+        this.tagName = tag.toUpperCase()
+        /** @type {(Fake_Element | Fake_Text)[]} */
+        this.childNodes = []
+        /** @type {Fake_Element | null} */
+        this.parentElement = null
+        /** @type {string} */
+        this.attrs = ""
+        this.type = ""
+        this.disabled = false
+    }
+    get children() {
+        return this.childNodes.filter(node => node instanceof Fake_Element)
+    }
+    /** @template {Fake_Element | Fake_Text} N @param {N} node @returns {N} */
+    appendChild(node) {
+        node.parentElement = this
+        this.childNodes.push(node)
+        return node
+    }
+    /** @param {string} name @param {string} value */
+    setAttribute(name, value) {
+        this.attrs += " " + name + "=\"" + value + "\""
+    }
+    /** @param {Fake_Element | Fake_Text} node */
+    replaceWith(node) {
+        const parent = /** @type {Fake_Element} */(this.parentElement)
+        parent.childNodes[parent.childNodes.indexOf(this)] = node
+        node.parentElement = parent
+    }
+    /** @returns {string} */
+    get textContent() { return this.childNodes.map(node => node.textContent).join("") }
+    /** @returns {string} */
+    get innerHTML()   { return this.childNodes.map(node => node.outerHTML).join("") }
+    /** @returns {string} */
+    get outerHTML() {
+        const tag = this.tagName.toLowerCase()
+        const open = "<" + tag + this.attrs + ">"
+        return ["br", "hr", "img", "input"].includes(tag) ? open : open + this.innerHTML + "</" + tag + ">"
+    }
+}
+
+/**
+ * Render the markdown with smd's default_renderer into a small fake DOM, written whole, char
+ * by char and at every two-chunk split, and compare the HTML it makes.
+ * @param {string             } title
+ * @param {string             } markdown
+ * @param {string             } expected_html
+ * @param {smd.Parser_Options=} options
+ * @returns {void}
+ */
+export function test_default_renderer(title, markdown, expected_html, options) {
+    /** @type {*} */
+    const global = globalThis
+    /** @type {Fake_Element} */
+    let root = new Fake_Element("div")
+    test_every_write(title + "; default renderer", markdown, () => {
+        root = new Fake_Element("div")
+        global.document = {
+            /** @param {string} tag */  createElement : (tag)  => new Fake_Element(tag),
+            /** @param {string} text */ createTextNode: (text) => new Fake_Text(text),
+        }
+        return smd.default_renderer(/** @type {*} */(root))
+    }, (_renderer, how) => {
+        delete global.document
+        assert.equal(root.innerHTML, expected_html, how)
+    }, options)
+}

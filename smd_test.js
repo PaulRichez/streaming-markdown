@@ -1,6 +1,8 @@
+import * as assert from "node:assert/strict"
 import * as smd from "./smd.js"
 
-import {test_single_write, test_chunked_write, test_steps, test_time, BR} from "./smd_test_setup.js"
+import {test_single_write, test_chunked_write, test_steps, test_time, test_every_write,
+    test_default_renderer, BR} from "./smd_test_setup.js"
 
 for (let level = 1; level <= 6; level += 1) {
 
@@ -210,6 +212,20 @@ for (const c of ["*", "-", "_"]) {
         )
     }
 }
+
+/* A rule's line is held until its end, and stays linear: reading the first character of that
+   growing line on every character made a 200 KB rule take 7.5 s */
+test_time("Horizontal Rule of 200 KB",
+    "-".repeat(200000) + "\n", 500)
+test_time("Horizontal Rule of 200 KB after a paragraph",
+    "x\n" + "*".repeat(200000) + "\nfoo", 500)
+test_time("A rule's line of 200 KB that ends as text",
+    "_".repeat(200000) + "x\n", 500)
+test_time("Horizontal Rule of 200 KB ending a display block",
+    "$$\nx\n" + "-".repeat(200000) + "\n", 500)
+test_single_write("Horizontal Rule of 20 KB",
+    "-".repeat(20000),
+    [{type: smd.Token.Rule, children: []}])
 
 for (let l = 1; l <= 4; l += 1) {
     const c = '`'.repeat(l)
@@ -2262,6 +2278,9 @@ const math_p      = (...children) => ({type: smd.Token.Paragraph, children})
 const math_inline = (tex) => ({type: smd.Token.Equation_Inline, children: [tex]})
 /** @type {(tex: string) => Test_Renderer_Node} */
 const math_block  = (tex) => ({type: smd.Token.Equation_Block, children: [tex]})
+/** A display block written, then ended without its closer: set_attr(Unclosed, opener)
+ *  @type {(tex: string, open: string) => Test_Renderer_Node} */
+const math_unclosed = (tex, open) => ({type: smd.Token.Equation_Block, attrs: {[smd.Attr.Unclosed]: open}, children: [tex]})
 /** @type {(text: string) => Test_Renderer_Node} */
 const math_code   = (text) => ({type: smd.Token.Code_Inline, children: [text]})
 
@@ -2333,13 +2352,13 @@ test_math("Math: a $$ block closed by \\], then Markdown",
     [math_p(math_block("x^2\n")), math_p("Next paragraph.")])
 test_math("Math: a blank line ends an unclosed block",
     "$$\nE = mc^2\n\nThe answer continues.\n\n- item",
-    [math_p(math_block("E = mc^2\n")), math_p("The answer continues."), {
+    [math_p(math_unclosed("E = mc^2\n", "$$")), math_p("The answer continues."), {
         type    : smd.Token.List_Unordered,
         children: [{type: smd.Token.List_Item, children: ["item"]}],
     }])
 test_math("Math: a whitespace-only line ends an unclosed block",
     "\\[\nx\n \nafter",
-    [math_p(math_block("x\n ")), math_p("after")])
+    [math_p(math_unclosed("x\n ", "\\[")), math_p("after")])
 test_math("Math: $ inside a $$ block is TeX",
     "$$\na $x$ b\n$$",
     [math_p(math_block("a $x$ b\n"))])
@@ -2424,6 +2443,28 @@ test_math("Math: \\$ inside a formula is TeX, not a closer",
 test_math("Math: TeX arrives intact",
     "$a\\,b \\\\ c*d*e_1 \\{x\\}$",
     [math_p(math_inline("a\\,b \\\\ c*d*e_1 \\{x\\}"))])
+
+/* A $ inside braces is TeX, not the closer: braces are counted, \{ and \} are not, and the
+   count never goes below zero */
+test_math("Math: a $ inside braces is TeX",
+    "$\\text{in $x$ units}$",
+    [math_p(math_inline("\\text{in $x$ units}"))])
+test_math("Maths off: a $ inside braces",
+    "$\\text{in $x$ units}$",
+    [math_p("$\\text{in $x$ units}$")],
+    {math: false})
+test_math("Math: nested braces",
+    "$\\frac{a}{\\text{b $c$}} = d$ e",
+    [math_p(math_inline("\\frac{a}{\\text{b $c$}} = d"), " e")])
+test_math("Math: an escaped brace is not counted",
+    "$\\{a$ b$",
+    [math_p(math_inline("\\{a"), " b$")])
+test_math("Math: the brace count never goes below zero",
+    "$}{x$y}$",
+    [math_p(math_inline("}{x$y}"))])
+test_math("Math: an unclosed brace keeps the formula open: no closer, text",
+    "$\\text{a $5 and more",
+    [math_p("$\\text{a $5 and more")])
 test_math("Math: text given back is still markdown",
     "$5 and **bold** _em_",
     [math_p("$5 and ", {
@@ -2759,19 +2800,19 @@ test_math("Math: a $$ block goes on over TeX lines that start like blocks",
     [math_p(math_block("x\n-y\n#1\n--\n~x\n``x\n< y\n"))])
 test_math("Math: a heading ends a $$ block",
     "$$\nE = mc^2\n# Heading\n",
-    [math_p(math_block("E = mc^2\n")), {type: smd.Token.Heading_1, children: ["Heading"]}])
+    [math_p(math_unclosed("E = mc^2\n", "$$")), {type: smd.Token.Heading_1, children: ["Heading"]}])
 test_math("Math: a rule ends a $$ block",
     "$$\nx\n---\ny",
-    [math_p(math_block("x\n")), {type: smd.Token.Rule, children: []}, math_p("y")])
+    [math_p(math_unclosed("x\n", "$$")), {type: smd.Token.Rule, children: []}, math_p("y")])
 test_math("Math: a code fence ends a \\[ block",
     "\\[\nx\n```\ncode\n```",
-    [math_p(math_block("x\n")), {type: smd.Token.Code_Fence, children: ["code"]}])
+    [math_p(math_unclosed("x\n", "\\[")), {type: smd.Token.Code_Fence, children: ["code"]}])
 test_math("Math: an inner product is TeX in a $$ block",
     "$$\n<x, y> = 0\n$$",
     [math_p(math_block("<x, y> = 0\n"))])
 test_math("Math: a block tag ends a $$ block",
     "$$\nx\n<DIV class=\"a\">\ny",
-    [math_p(math_block("x\n"), BR, "<DIV class=\"a\">", BR, "y")])
+    [math_p(math_unclosed("x\n", "$$"), BR, "<DIV class=\"a\">", BR, "y")])
 test_math("Math: a heading on the line after $$: the opener was text",
     "$$\n# h\n",
     [math_p("$$"), {type: smd.Token.Heading_1, children: ["h"]}])
@@ -2787,19 +2828,170 @@ test_math("Math: a $$ block in a quote",
     [math_quote(math_p(math_block(" x\n ")))])
 test_math("Math: a $$ block in a quote, then a blank quote line",
     "> $$\n> x\n>\n> after",
-    [math_quote(math_p(math_block(" x\n")), math_p("after"))])
+    [math_quote(math_p(math_unclosed(" x\n", "$$")), math_p("after"))])
 test_math("Math: a $$ block in a quote, with a lazy line",
     "> $$\nx\n> $$",
     [math_quote(math_p(math_block("x\n ")))])
 test_math("Math: a $$ block in a quote ends at a heading",
     "> $$\n> x\n> # h",
-    [math_quote(math_p(math_block(" x\n ")), {type: smd.Token.Heading_1, children: ["h"]})])
+    [math_quote(math_p(math_unclosed(" x\n ", "$$")), {type: smd.Token.Heading_1, children: ["h"]})])
 test_math("Math: a nested quote ends a $$ block in a quote",
     "> $$\n> > x",
     [math_quote(math_p("$$"), math_quote(math_p("x")))])
 test_math("Math: a $$ block in a list in a quote",
     "> - $$\n>   x\n>   $$",
     [math_quote(math_list([math_block(" x\n ")]))])
+
+/* A display block written from its first line of TeX, then ended without its closer — at a
+   blank line or a line that opens a block — was not maths (Pandoc): set_attr(Unclosed, opener)
+   tells the renderer, just before its end_token. Closed by a closer, or still open at the
+   end, it is maths and gets no attribute. */
+test_math("Math: a blank line inside a $$ block: the block is unclosed",
+    "$$\na\n\nb\n$$",
+    [math_p(math_unclosed("a\n", "$$")), math_p("b", BR, "$$")])
+test_math("Math: a $$ block closed by its closer is not unclosed",
+    "$$\na\n$$",
+    [math_p(math_block("a\n"))])
+test_math("Math: a $$ block still open at the end is not unclosed",
+    "$$\na\n",
+    [math_p(math_block("a\n"))])
+test_math("Math: a $$ block still open at the end of a line of TeX is not unclosed",
+    "$$\na\n-",
+    [math_p(math_block("a\n-"))])
+
+/**
+ * A renderer that logs its calls.
+ * @returns {smd.Renderer<(string | number)[][]>} */
+const log_renderer = () => ({
+    data     : [],
+    add_token: (log, type)        => {log.push(["add_token", type])},
+    end_token: (log)              => {log.push(["end_token"])},
+    add_text : (log, text)        => {log.push(["add_text", text])},
+    set_attr : (log, type, value) => {log.push(["set_attr", type, value])},
+})
+/**
+ * The calls made on the Equation_Block: set_attr is made once, on it, just before its end_token.
+ * @param {string} title
+ * @param {string} markdown
+ * @param {string | null} unclosed - the opener set_attr is called with, or null for no call
+ */
+function test_unclosed_call(title, markdown, unclosed) {
+    test_every_write(title, markdown, log_renderer, (renderer, how) => {
+        const log   = renderer.data
+        const start = log.findIndex(call => "add_token" === call[0] && smd.Token.Equation_Block === call[1])
+        assert.notEqual(start, -1, how + ": no Equation_Block")
+        let depth = 0, end = start
+        for (; end < log.length; end += 1) {
+            if ("add_token" === log[end][0]) depth += 1
+            if ("end_token" === log[end][0] && 0 === (depth -= 1)) break
+        }
+        const attrs = log.filter(call => "set_attr" === call[0])
+        if (null === unclosed) {
+            assert.deepEqual(attrs, [], how)
+        } else {
+            assert.deepEqual(attrs, [["set_attr", smd.Attr.Unclosed, unclosed]], how)
+            assert.deepEqual(log[end - 1], ["set_attr", smd.Attr.Unclosed, unclosed], how + ": not just before end_token")
+        }
+    })
+}
+test_unclosed_call("Math: set_attr(Unclosed, \"$$\") at a blank line",            "$$\na\n\nb",          "$$")
+test_unclosed_call("Math: set_attr(Unclosed, \"\\\\[\") at a whitespace-only line", "\\[\na\n  \nb",       "\\[")
+test_unclosed_call("Math: set_attr(Unclosed) at a line that opens a block",       "$$\na\n# h\nb",       "$$")
+test_unclosed_call("Math: no set_attr on a block closed by its closer",           "$$\na\n$$\n\nb",      null)
+test_unclosed_call("Math: no set_attr on a block open at the end",                "$$\na\n",             null)
+
+/* The default renderer turns an unclosed block back into its text: the opener, a newline and
+   the TeX, as Pandoc reads it (\[ is the escaped bracket [) */
+test_default_renderer("Math: an unclosed $$ block is text",
+    "$$\na\n\nb\n$$",
+    "<p>$$\na\n</p><p>b<br>$$</p>")
+test_default_renderer("Math: an unclosed \\[ block is text",
+    "\\[\na\n\nb",
+    "<p>[\na\n</p><p>b</p>")
+test_default_renderer("Math: a $$ block ended by a heading is text",
+    "Some $$\nx\n# h",
+    "<p>Some $$\nx\n</p><h1>h</h1>")
+test_default_renderer("Math: a closed $$ block is an equation-block",
+    "$$\na\n$$",
+    "<p><equation-block>a\n</equation-block></p>")
+test_default_renderer("Math: a $$ block open at the end is an equation-block",
+    "$$\na\n",
+    "<p><equation-block>a\n</equation-block></p>")
+
+/* A table row ends with its line: a $$ or \[ ending it is text, never a block over the next
+   lines, as with maths off */
+test_math("Math: $$ ending a table row's line is text",
+    "| a $$\n| b |",
+    [math_table(math_row(" a $$"), math_row(" b "))])
+test_math("Math: \\[ ending a table row's line is text",
+    "| a \\[\n| b |",
+    [math_table(math_row(" a ["), math_row(" b "))])
+test_math("Math: $$ ending a table row's line opens no block over the next line",
+    "| a $$\nnext $x$",
+    [math_table(math_row(" a $$")), math_p("next ", math_inline("x"))])
+
+/* Tables: a row without its closing pipe ends with its line (GFM), a row without a delimiter
+   row before it is a row of the same table, a blank line ends the table, and in a quote each
+   line's > is the quote's. Maths on and off, whole, char by char and at every split. */
+/** @type {(...children: Children) => Test_Renderer_Node} */
+const table_quote = (...children) => ({type: smd.Token.Blockquote, children})
+for (const [mode, options] of /** @type {const} */ ([["on", undefined], ["off", {math: false}]])) {
+    test_math("Table, maths "+mode+": rows without their closing pipe",
+        "| a | b\n|---|---|\n| c | d |",
+        [math_table(math_row(" a ", " b"), math_row(" c ", " d "))], options)
+    test_math("Table, maths "+mode+": no closing pipe anywhere",
+        "| a | b\n|---|---\n| c | d",
+        [math_table(math_row(" a ", " b"), math_row(" c ", " d"))], options)
+    test_math("Table, maths "+mode+": no delimiter row, a row without its closing pipe",
+        "| a\n| b |\n| c |",
+        [math_table(math_row(" a"), math_row(" b "), math_row(" c "))], options)
+    test_math("Table, maths "+mode+": no delimiter row",
+        "| a |\n| b |\n| c |",
+        [math_table(math_row(" a "), math_row(" b "), math_row(" c "))], options)
+    test_math("Table, maths "+mode+": inline code left open in a row ends with it",
+        "| a `b\n| c |",
+        [math_table({type: smd.Token.Table_Row, children: [{type: smd.Token.Table_Cell,
+            children: [" a ", math_code("b")]}]}, math_row(" c "))], options)
+    test_math("Table, maths "+mode+": a line that is no row ends the table",
+        "| a\nx",
+        [math_table(math_row(" a")), math_p("x")], options)
+    test_math("Table, maths "+mode+": a list after the first row",
+        "| a |\n- item",
+        [math_table(math_row(" a ")), math_list("item")], options)
+    test_math("Table, maths "+mode+": a blank line after the first row ends the table",
+        "| a |\n\nx",
+        [math_table(math_row(" a ")), math_p("x")], options)
+    test_math("Table, maths "+mode+": a whitespace-only line after the first row ends the table",
+        "| a\n  \nx",
+        [math_table(math_row(" a")), math_p("x")], options)
+    test_math("Table, maths "+mode+": a line without a leading pipe after the rows ends the table",
+        "| a |\n|---|\nx",
+        [math_table(math_row(" a ")), math_p("x")], options)
+    test_math("Table, maths "+mode+": a whitespace-only line after the rows ends the table",
+        "| a |\n|---|\n  \nx",
+        [math_table(math_row(" a ")), math_p("x")], options)
+    test_math("Table, maths "+mode+": spaces at the end write nothing",
+        "| a |\n| b |\n  ",
+        [math_table(math_row(" a "), math_row(" b "))], options)
+    test_math("Table, maths "+mode+": a paragraph after a table without closing pipes",
+        "| a | b\n|---|---|\n| c | d\n\nafter",
+        [math_table(math_row(" a ", " b"), math_row(" c ", " d")), math_p("after")], options)
+    test_math("Table, maths "+mode+": in a quote",
+        "> | a |\n> |---|\n> | b |",
+        [table_quote(math_table(math_row(" a "), math_row(" b ")))], options)
+    test_math("Table, maths "+mode+": in a quote, without closing pipes",
+        "> | a\n> | b",
+        [table_quote(math_table(math_row(" a"), math_row(" b")))], options)
+    test_math("Table, maths "+mode+": in a quote, then a blank quote line",
+        "> | a |\n>\n> x",
+        [table_quote(math_table(math_row(" a ")), math_p("x"))], options)
+    test_math("Table, maths "+mode+": in a quote, then a blank line",
+        "> | a |\n\n> x",
+        [table_quote(math_table(math_row(" a "))), table_quote(math_p("x"))], options)
+    test_math("Table, maths "+mode+": in a list item, without closing pipes",
+        "- item\n  | a | b\n  |---|---|\n  | c | d",
+        [math_list(["item", math_table(math_row(" a ", " b"), math_row(" c ", " d"))])], options)
+}
 
 /* Text given back is parsed again, so a later formula in the paragraph is still maths
    (Pandoc retries at the next opener) */

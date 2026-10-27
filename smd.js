@@ -119,19 +119,24 @@ export function token_to_string(type) {
 }
 
 export const
-    HREF    = 1,
-    SRC     = 2,
-    LANG    = 4,
-    CHECKED = 8,
-    START   = 16
+    HREF     = 1,
+    SRC      = 2,
+    LANG     = 4,
+    CHECKED  = 8,
+    START    = 16,
+    /* On an Equation_Block, just before its end_token: the block ended without its closer, at
+       a blank line or a line that opens a block, so it was not maths (Pandoc). The value is
+       its opener, "$$" or "\\[". The default renderer turns the block back into text. */
+    UNCLOSED = 32
 
 /** @enum {(typeof Attr)[keyof typeof Attr]} */
 export const Attr = /** @type {const} */({
-    Href   : HREF,
-    Src    : SRC,
-    Lang   : LANG,
-    Checked: CHECKED,
-    Start  : START,
+    Href    : HREF,
+    Src     : SRC,
+    Lang    : LANG,
+    Checked : CHECKED,
+    Start   : START,
+    Unclosed: UNCLOSED,
 })
 
 /**
@@ -139,11 +144,12 @@ export const Attr = /** @type {const} */({
  * @returns {string    } */
 export function attr_to_html_attr(type) {
     switch (type) {
-    case HREF:    return "href"
-    case SRC :    return "src"
-    case LANG:    return "class"
-    case CHECKED: return "checked"
-    case START:   return "start"
+    case HREF:     return "href"
+    case SRC :     return "src"
+    case LANG:     return "class"
+    case CHECKED:  return "checked"
+    case START:    return "start"
+    case UNCLOSED: return "data-unclosed"
     }
 }
 
@@ -197,12 +203,13 @@ export const heading_to_level = (token) => {
  * @property {number      } link_depth      - Brackets opened inside a Link or Image's text, not yet closed
  * @property {string      } last_char       - Last character of the text already flushed, "" after a token boundary
  * @property {boolean     } math            - Maths is recognised, see {@link Parser_Options}
- * @property {string      } eq_open         - Opener of the formula held back: "$", "\\(", "$$", "\\[" or ""
+ * @property {string      } eq_open         - Opener of the formula held back, or of the display block being written: "$", "\\(", "$$", "\\[" or ""
  * @property {string      } eq_text         - TeX of a formula held back until its closer is confirmed
  * @property {boolean     } eq_space        - The held TeX ends on a space, a tab or a newline
  * @property {boolean     } eq_blank        - Only spaces since a newline: in held TeX, or in an Equation_Block's line
  * @property {string      } eq_line         - Start of a formula's line that may still open a block, see {@link line_opens}
  * @property {number      } eq_head         - The held formula's first line, after the opener: 0 only spaces yet, 1 text, 2 none
+ * @property {number      } eq_depth        - Braces open in the held TeX: a $ inside them is TeX, \text{in $x$ units}
  * @property {number      } eq_rerun       - Text being given back by a held formula: 0 none, 1 once, 2 twice or more
  * @property {number      } eq_rerun_at     - {@link Parser.eq_rerun} when the held formula was opened
  */
@@ -263,6 +270,7 @@ export function parser(renderer, options) {
         eq_blank   : false,
         eq_line    : "",
         eq_head    : 0,
+        eq_depth   : 0,
         eq_rerun   : 0,
         eq_rerun_at: 0,
     }
@@ -290,8 +298,9 @@ export function parser_end(p) {
         if (p.eq_line !== "" && 0 === line_opens(p, '\n', true, false)) {
             add_text(p)
             add_token(p, EQUATION_BLOCK)
+            p.eq_open  = p.pending.slice(0, 2)
             p.eq_blank = true
-            p.pending = ""
+            p.pending  = ""
             p.blockquote_idx = 0 // the line is read again
             parser_write(p, after.slice(1))
         } else {
@@ -300,6 +309,13 @@ export function parser_end(p) {
             p.pending = ""
             parser_write(p, after)
         }
+    }
+    /* A display block still being written, at a line's start: the end is no blank line, so
+       it ends as in 0.3.1, without UNCLOSED */
+    if (p.token === EQUATION_BLOCK && "" === p.eq_line && p.eq_blank) {
+        p.text += p.pending
+        p.pending = ""
+        eq_block_end(p, false)
     }
     if (p.pending.length > 0) {
         parser_write(p, "\n")
@@ -400,6 +416,7 @@ function eq_hold(p, open) {
     p.eq_blank    = false
     p.eq_line     = ""
     p.eq_head     = 0
+    p.eq_depth    = 0
     p.eq_rerun_at = p.eq_rerun
     p.pending     = ""
 }
@@ -429,6 +446,20 @@ function eq_commit(p) {
     p.eq_open = ""
     p.eq_text = ""
     p.eq_line = ""
+}
+
+/**
+ * End the display block being written (opened by $$ or \[ ending its line, see MAYBE_EQ_BLOCK).
+ * Ended without its own closer — at a blank line, or at a line that opens a block — it was not
+ * maths, but the renderer has it already: set_attr(UNCLOSED, opener) says so, before end_token.
+ * @param   {Parser } p
+ * @param   {boolean} unclosed
+ * @returns {void   } */
+function eq_block_end(p, unclosed) {
+    add_text(p)
+    if (unclosed) p.renderer.set_attr(p.renderer.data, UNCLOSED, p.eq_open)
+    p.eq_open = ""
+    end_token(p)
 }
 
 /**
@@ -642,6 +673,21 @@ function continue_or_add_list(p, list_token) {
 }
 
 /**
+ * | a | b — a table row without its closing pipe ends with its line, as in GFM: its cell, and
+ * anything still open in it, end there, and the next line is the table's again.
+ * @param   {Parser } p
+ * @returns {boolean} a row was ended */
+function table_row_end(p) {
+    const row = idx_of_token(p, TABLE_ROW, 1)
+    if (-1 === row) return false
+    add_text(p)
+    end_tokens_to_len(p, row - 1)
+    p.table_state = Math.min(p.table_state + 1, 2)
+    p.blockquote_idx = 0
+    return true
+}
+
+/**
  * Create a new list
  * or continue the last one
  * @param   {Parser } p
@@ -729,7 +775,9 @@ export function parser_write(p, chunk) {
         case LIST_UNORDERED:
             console.assert(p.text.length === 0, "Root should not have any text")
 
-            switch (p.pending[0]) {
+            /* A rule's line is held in pending until its end: reading pending[0] there would
+               flatten that growing string on every character, quadratic over the line */
+            switch (p.hr_chars > 0 ? p.hr_char : p.pending[0]) {
             case undefined:
                 p.pending = char
                 continue
@@ -1002,6 +1050,14 @@ export function parser_write(p, chunk) {
             parser_write(p, to_write)
             continue
         case TABLE:
+            /* > | b | — in a quote, the line's > is the quote's, as on a paragraph's line */
+            if ('>' === char && /^ *$/.test(p.pending)) {
+                const quote = idx_of_token(p, BLOCKQUOTE, p.blockquote_idx+1)
+                if (-1 !== quote) {
+                    p.blockquote_idx = quote
+                    continue
+                }
+            }
             if (p.table_state === 1) {
                 switch (char) {
                 case '-':
@@ -1010,14 +1066,30 @@ export function parser_write(p, chunk) {
                 case ':':
                     p.pending = pending_with_char
                     continue
+                /* |---|---| is the delimiter row; a blank line ends the table (below) */
                 case '\n':
                     p.table_state = 2
-                    p.pending = ""
+                    if (/^ *$/.test(p.pending)) {
+                        p.pending = char
+                    } else {
+                        p.pending = ""
+                        p.blockquote_idx = 0
+                    }
                     continue
-                default:
-                    end_token(p)
-                    p.table_state = 0
-                    break
+                default: {
+                    /* | b | — no delimiter row: a row of the table all the same (the table
+                       is already written). Any other line ends the table and is read again. */
+                    const line = p.pending + char
+                    p.pending = ""
+                    if ('|' === line.trimStart()[0]) {
+                        p.table_state = 2
+                    } else {
+                        end_token(p)
+                        p.table_state = 0
+                    }
+                    parser_write(p, line)
+                    continue
+                }
                 }
             } else {
                 /*
@@ -1033,18 +1105,37 @@ export function parser_write(p, chunk) {
                     p.pending = char
                     continue
                 }
+                /* a whitespace-only line is a blank line: it ends the table (below) */
+                if ('\n' === char && /^ +$/.test(p.pending)) {
+                    p.pending = char
+                    continue
+                }
+                /* x — a line that does not start with | ends the table, and is read again */
+                if ('|' !== char && '\n' !== char && /^ *$/.test(p.pending)) {
+                    const line = p.pending + char
+                    p.pending = ""
+                    end_token(p)
+                    p.table_state = 0
+                    parser_write(p, line)
+                    continue
+                }
                 switch (p.pending) {
                 case "|":
                     add_token(p, TABLE_ROW)
                     p.pending = ""
                     parser_write(p, char)
                     continue
-                case "\n":
+                case "\n": {
                     end_token(p)
+                    /* a blank line also ends a quote whose > it did not have */
+                    const quote = idx_of_token(p, BLOCKQUOTE, p.blockquote_idx+1)
+                    if (-1 !== quote) end_tokens_to_len(p, quote - 1)
                     p.pending = ""
                     p.table_state = 0
+                    p.blockquote_idx = 0
                     parser_write(p, char)
                     continue
+                }
                 }
             }
             break
@@ -1062,6 +1153,7 @@ export function parser_write(p, chunk) {
                 end_token(p)
                 p.table_state = Math.min(p.table_state+1, 2)
                 p.pending = ""
+                p.blockquote_idx = 0
                 parser_write(p, char)
                 continue
             default:
@@ -1165,6 +1257,7 @@ export function parser_write(p, chunk) {
             case '\n':
                 p.text += p.pending
                 p.pending = ""
+                if (table_row_end(p)) continue
                 p.token = LINE_BREAK
                 p.blockquote_idx = 0
                 add_text(p)
@@ -1308,7 +1401,7 @@ export function parser_write(p, chunk) {
             */
             if (2 === p.pending.length) {
                 /* \[ or $$ ends its line: held until the next line says (below) */
-                if (char === '\n') {
+                if (char === '\n' && idx_of_token(p, TABLE_CELL, 1) === -1) {
                     p.pending = pending_with_char
                     p.eq_line = ""
                     p.blockquote_idx = 0
@@ -1316,11 +1409,12 @@ export function parser_write(p, chunk) {
                 /* $$x$$ or \[x\] on one line, or inside a paragraph
                      ^       ^
                 */
-                else if (p.eq_rerun < 2) {
+                else if (char !== '\n' && p.eq_rerun < 2) {
                     eq_hold(p, p.pending)
                     parser_write(p, char)
                 }
-                /* text given back twice holds no such formula (see eq_flush) */
+                /* | a $$ — a table row ends with its line: there, it is text.
+                   And text given back twice holds no such formula (see eq_flush) */
                 else {
                     p.token = p.tokens[p.len]
                     p.text += '\\' === p.pending[0] ? '[' : p.pending
@@ -1354,6 +1448,7 @@ export function parser_write(p, chunk) {
             } else {
                 add_text(p)
                 add_token(p, EQUATION_BLOCK)
+                p.eq_open  = open
                 p.eq_blank = true
                 p.blockquote_idx = 0 // the line is read again
                 parser_write(p, after.slice(1))
@@ -1363,8 +1458,7 @@ export function parser_write(p, chunk) {
         case EQUATION_BLOCK:
             /* \] or $$: either closes it */
             if ("\\]" === pending_with_char || "$$" === pending_with_char) {
-                add_text(p)
-                end_token(p)
+                eq_block_end(p, false)
                 p.pending = ""
                 continue
             }
@@ -1387,8 +1481,7 @@ export function parser_write(p, chunk) {
                 const line = p.pending + char
                 p.pending = ""
                 if (1 === opens) {
-                    add_text(p)
-                    end_token(p)
+                    eq_block_end(p, true)
                     p.token = LINE_BREAK // the quote's markers on the line are read already
                     parser_write(p, line)
                 } else {
@@ -1404,8 +1497,7 @@ export function parser_write(p, chunk) {
             if ('\n' === char) {
                 if (p.eq_blank) {
                     p.text += p.pending
-                    add_text(p)
-                    end_token(p)
+                    eq_block_end(p, true)
                     p.pending = char
                     p.token = LINE_BREAK // the quote's markers on the line are read already
                     continue
@@ -1489,7 +1581,10 @@ export function parser_write(p, chunk) {
                     p.pending = char
                     continue
                 }
-                if ("$" !== open) break
+                /* $\text{in $x$ units}$ — a $ inside braces is TeX
+                               ^
+                */
+                if ("$" !== open || p.eq_depth > 0) break
                 /* $x $ — a closer must follow a non-space: the formula was text
                      ^
                 */
@@ -1519,6 +1614,13 @@ export function parser_write(p, chunk) {
                 eq_flush(p)
                 parser_write(p, char)
                 continue
+            /* braces, not escaped (\{ is added with its backslash above): never below 0 */
+            case '{':
+                p.eq_depth += 1
+                break
+            case '}':
+                if (p.eq_depth > 0) p.eq_depth -= 1
+                break
             }
             eq_add(p, char)
             continue
@@ -1681,6 +1783,11 @@ export function parser_write(p, chunk) {
             }
         /* Newline */
         case '\n':
+            if (table_row_end(p)) {
+                p.pending = ""
+                parser_write(p, char)
+                continue
+            }
             switch (p.token) {
             case IMAGE:
             case EQUATION_BLOCK:
@@ -2071,7 +2178,14 @@ export function default_add_text(data, text) {
 
 /** @type {Default_Renderer_Set_Attr} */
 export function default_set_attr(data, type, value) {
-    data.nodes[data.index].setAttribute(attr_to_html_attr(type), value)
+    const node = data.nodes[data.index]
+    /* A display block that was not maths is text again, its opener first: $$ as written,
+       \[ as the escaped bracket it was, [ */
+    if (UNCLOSED === type) {
+        node.replaceWith(document.createTextNode(("\\[" === value ? "[" : value) + "\n" + node.textContent))
+        return
+    }
+    node.setAttribute(attr_to_html_attr(type), value)
 }
 
 

@@ -81,7 +81,8 @@ const parser = smd.parser(renderer, {math: false})
 | `math` | `boolean` | `true`  | Recognise maths: `$x$` and `\(x\)` as `Equation_Inline`, `$$x$$` and `\[x\]` as `Equation_Block`.<br>`false`: `$` is text, `\(` and `\[` are Markdown escapes, and no `Equation_*` token is written. |
 
 With maths on, `$` follows [Pandoc's rules](https://pandoc.org/MANUAL.html#math): the opener is followed by a
-non-space, the closer follows a non-space and is not followed by a digit, so `$5 and $10` is text.
+non-space, the closer follows a non-space and is not followed by a digit, so `$5 and $10` is text. A `$`
+inside braces is TeX, not the closer: `$\text{in $x$ units}$` is one formula.
 A formula is held back until its closer is confirmed, then written as one token, and its `end_token` is where
 it ends: nothing written is ever taken back. The text after a `$` that never closes appears at the end of its
 line, cell or paragraph, or past 1024 characters (4096 for display maths). A formula held back does not cross a
@@ -98,6 +99,9 @@ after it on its own line (`Since $$a = b`). A formula still held back there is t
 A display block opened by `$$` or `\[` at the end of a line is written as it streams, from its first line of
 TeX: its lines are TeX, list items and `|` lines included, and it ends at `$$`, `\]`, a blank line or a line
 that opens another block. A blank line, the end, or such a line right after the opener makes the opener text.
+Ended by a blank line or such a line, without its closer, it was not maths: the renderer gets
+`set_attr(Attr.Unclosed, opener)` before its `end_token` (see [attributes](#attributes)). A `$$` or `\[` ending a
+table row's line is text.
 
 ### `write` function
 
@@ -137,6 +141,19 @@ smd.parser_end(parser)
 | `end_token` | `Renderer_End_Token<T>`| When the token ends. |
 | `add_text`  | `Renderer_Add_Text<T>` | To append text to current token.<br>Can be called multiple times or none. |
 | `set_attr`  | `Renderer_Set_Attr<T>` | Set additional attributes of current token eg. the link url. |
+
+### Attributes
+
+`set_attr(data, type, value)` is called on the current token with one of `Attr`:
+
+| `Attr`     | On               | Value |
+| ---------- | ---------------- | ----- |
+| `Href`     | `Link`, `Raw_URL`| The url. |
+| `Src`      | `Image`          | The url. |
+| `Lang`     | `Code_Fence`     | The language after the opening fence. |
+| `Checked`  | `Checkbox`       | `""`, when the box is checked. |
+| `Start`    | `List_Ordered`   | The first number, when it is not 1. |
+| `Unclosed` | `Equation_Block` | The opener, `"$$"` or `"\\["`. Called just before the block's `end_token` when it ended without its closer, at a blank line or a line that opens a block: it was not maths, and should be shown as text. The default renderer replaces the element with its opener (`[` for `\[`), a newline and its TeX. |
 
 ## Markdown features
 
