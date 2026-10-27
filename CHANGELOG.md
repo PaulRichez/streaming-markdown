@@ -4,7 +4,7 @@
 [thetarnav/streaming-markdown](https://github.com/thetarnav/streaming-markdown) (`streaming-markdown` on npm),
 by Damian Tarnawski. Versions up to 0.2.15 are the original's.
 
-## Unreleased
+## 0.3.2
 
 A custom renderer should handle the new `Attr.Unclosed`: it marks an `Equation_Block` that turned out not to be
 maths, and the default renderer already turns it back into text. A renderer that ignores it renders as 0.3.1 did.
